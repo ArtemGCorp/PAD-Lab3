@@ -8,7 +8,9 @@ import (
 	"time"
 
 	"fyne.io/fyne/v2"
+	"fyne.io/fyne/v2/canvas"
 	"fyne.io/fyne/v2/container"
+	"fyne.io/fyne/v2/layout"
 	"fyne.io/fyne/v2/theme"
 	"fyne.io/fyne/v2/widget"
 
@@ -30,13 +32,15 @@ type ui struct {
 	to        *widget.Select
 	swap      *widget.Button
 	convert   *widget.Button
-	result    *widget.Label
+	result    *canvas.Text
 	rateLine  *widget.Label
 
 	date    *widget.Entry
 	loadBtn *widget.Button
 	info    *widget.Label
+	source  *widget.Label
 	notice  *widget.Label
+	banner  fyne.CanvasObject
 
 	table  *bnm.Table
 	loaded bool
@@ -46,8 +50,8 @@ func newUI(win fyne.Window, loader *rates.Loader) *ui {
 	u := &ui{win: win, loader: loader, spawn: func(f func()) { go f() }}
 
 	u.amount = widget.NewEntry()
-	u.amount.SetPlaceHolder("Сумма, например 100 или 12,50")
-	u.amount.OnChanged = func(string) { u.amountErr.SetText(""); u.refreshButton() }
+	u.amount.SetPlaceHolder("Например, 100 или 12,50")
+	u.amount.OnChanged = func(string) { u.setAmountErr(""); u.refreshButton() }
 	u.amount.OnSubmitted = func(string) {
 		if !u.convert.Disabled() {
 			u.onConvert()
@@ -55,6 +59,7 @@ func newUI(win fyne.Window, loader *rates.Loader) *ui {
 	}
 	u.amountErr = widget.NewLabel("")
 	u.amountErr.Importance = widget.DangerImportance
+	u.amountErr.Hide()
 
 	u.from = widget.NewSelect(nil, func(string) { u.onCurrencyChanged() })
 	u.from.PlaceHolder = "Из валюты"
@@ -62,53 +67,97 @@ func newUI(win fyne.Window, loader *rates.Loader) *ui {
 	u.to.PlaceHolder = "В валюту"
 	u.swap = widget.NewButtonWithIcon("", theme.ViewRefreshIcon(), u.onSwap)
 
-	u.convert = widget.NewButton("Конвертировать", u.onConvert)
+	u.convert = widget.NewButtonWithIcon("Конвертировать", theme.MailForwardIcon(), u.onConvert)
 	u.convert.Importance = widget.HighImportance
 
-	u.result = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{Bold: true})
-	u.rateLine = widget.NewLabelWithStyle("", fyne.TextAlignCenter, fyne.TextStyle{})
+	u.result = canvas.NewText("—", theme.Color(theme.ColorNamePrimary))
+	u.result.TextSize = 28
+	u.result.TextStyle = fyne.TextStyle{Bold: true}
+	u.result.Alignment = fyne.TextAlignCenter
+	u.rateLine = widget.NewLabelWithStyle("Введите сумму и нажмите «Конвертировать»", fyne.TextAlignCenter, fyne.TextStyle{})
 
 	u.date = widget.NewEntry()
 	u.date.SetText(time.Now().Format(bnm.DateLayout))
-	u.loadBtn = widget.NewButton("Загрузить курс", func() { u.load(true) })
+	u.date.SetPlaceHolder("ДД.ММ.ГГГГ")
+	u.loadBtn = widget.NewButtonWithIcon("Загрузить курс", theme.DownloadIcon(), func() { u.load(true) })
 
 	u.info = widget.NewLabel("Загрузка курсов…")
-	u.info.Wrapping = fyne.TextWrapWord
+	u.info.TextStyle = fyne.TextStyle{Bold: true}
+	u.source = widget.NewLabel("Источник: " + bnm.Source)
 	u.notice = widget.NewLabel("")
 	u.notice.Wrapping = fyne.TextWrapWord
-	u.notice.Importance = widget.WarningImportance
+	u.banner = banner(u.notice)
+	u.banner.Hide()
 
-	currencies := container.NewBorder(nil, nil, nil, u.swap, container.NewGridWithColumns(2, u.from, u.to))
-	form := widget.NewForm(
-		widget.NewFormItem("Сумма", container.NewVBox(u.amount, u.amountErr)),
-		widget.NewFormItem("Валюты", currencies),
-		widget.NewFormItem("Дата курса", container.NewBorder(nil, nil, nil, u.loadBtn, u.date)),
-	)
-	win.SetContent(container.NewPadded(container.NewVBox(
-		widget.NewLabelWithStyle("Конвертер валют · официальный курс НБМ", fyne.TextAlignCenter, fyne.TextStyle{Bold: true}),
-		form,
+	currencies := container.NewBorder(nil, nil, nil, nil,
+		container.NewBorder(nil, nil, nil, container.NewVBox(layout.NewSpacer(), u.swap),
+			container.NewGridWithColumns(2,
+				container.NewVBox(fieldLabel("Из валюты"), u.from),
+				container.NewVBox(fieldLabel("В валюту"), u.to))))
+
+	input := card(container.NewVBox(
+		fieldLabel("Сумма"), u.amount, u.amountErr,
+		currencies,
 		u.convert,
+	))
+
+	output := card(container.NewVBox(u.result, u.rateLine))
+
+	rateInfo := card(container.NewVBox(
+		container.NewBorder(nil, nil, widget.NewIcon(theme.HistoryIcon()), nil, u.info),
+		container.NewBorder(nil, nil, widget.NewIcon(theme.InfoIcon()), nil, u.source),
 		widget.NewSeparator(),
-		u.result,
-		u.rateLine,
-		widget.NewSeparator(),
-		u.info,
-		u.notice,
-	)))
-	win.Resize(fyne.NewSize(560, 480))
+		container.NewBorder(nil, nil, fieldLabel("Дата курса"), u.loadBtn, u.date),
+	))
+
+	win.SetContent(container.NewBorder(
+		header(theme.ComputerIcon(), "Конвертер валют", "Официальный курс Национального банка Молдовы"),
+		nil, nil, nil,
+		container.NewVScroll(container.NewPadded(container.NewVBox(u.banner, input, output, rateInfo))),
+	))
+	win.Resize(fyne.NewSize(600, 760))
 	u.refreshButton()
 	return u
+}
+
+// setNotice shows a warning banner, or hides it for an empty text.
+func (u *ui) setNotice(s string) {
+	u.notice.SetText(s)
+	showIf(u.banner, s != "")
+	u.win.Content().Refresh() // relayout: the banner changes the column height
+}
+
+func (u *ui) setAmountErr(s string) {
+	u.amountErr.SetText(s)
+	showIf(u.amountErr, s != "")
+	u.win.Content().Refresh()
+}
+
+func showIf(o fyne.CanvasObject, visible bool) {
+	if visible {
+		o.Show()
+	} else {
+		o.Hide()
+	}
+}
+
+func (u *ui) setResult(s string) {
+	if s == "" {
+		s = "—"
+	}
+	u.result.Text = s
+	u.result.Refresh()
 }
 
 // load requests rates for the date in the date field (today if userAction is false).
 func (u *ui) load(userAction bool) {
 	d, err := validate.ParseDate(u.date.Text)
 	if err != nil {
-		u.notice.SetText("Дата: " + err.Error())
+		u.setNotice("Дата: " + err.Error())
 		return
 	}
 	u.loadBtn.Disable()
-	u.notice.SetText("")
+	u.setNotice("")
 	if !u.loaded {
 		u.info.SetText("Загрузка курсов…")
 	} else {
@@ -127,10 +176,10 @@ func (u *ui) applyLoad(res rates.Result, err error) {
 	if err != nil {
 		if u.loaded {
 			u.info.SetText(u.infoText())
-			u.notice.SetText(err.Error() + " Оставлены ранее загруженные курсы.")
+			u.setNotice(err.Error() + " Оставлены ранее загруженные курсы.")
 		} else {
 			u.info.SetText("Курсы не загружены.")
-			u.notice.SetText(err.Error())
+			u.setNotice(err.Error())
 		}
 		u.refreshButton()
 		return
@@ -173,8 +222,8 @@ func (u *ui) applyLoad(res rates.Result, err error) {
 	keep(u.to, "MDL")
 
 	u.info.SetText(u.infoText())
-	u.notice.SetText(res.Notice)
-	u.result.SetText("")
+	u.setNotice(res.Notice)
+	u.setResult("")
 	u.rateLine.SetText("")
 	u.refreshButton()
 }
@@ -183,7 +232,8 @@ func (u *ui) infoText() string {
 	if u.table == nil {
 		return ""
 	}
-	return fmt.Sprintf("Курс на %s · Источник: %s", u.table.Date.Format(bnm.DateLayout), u.table.Source)
+	u.source.SetText("Источник: " + u.table.Source)
+	return fmt.Sprintf("Курс на %s", u.table.Date.Format(bnm.DateLayout))
 }
 
 func (u *ui) refreshButton() {
@@ -196,7 +246,7 @@ func (u *ui) refreshButton() {
 
 func (u *ui) onCurrencyChanged() {
 	u.refreshButton()
-	if u.result.Text != "" && !u.convert.Disabled() {
+	if u.result.Text != "—" && !u.convert.Disabled() {
 		u.onConvert()
 	}
 }
@@ -216,22 +266,22 @@ func (u *ui) onSwap() {
 func (u *ui) onConvert() {
 	amount, err := validate.ParseAmount(u.amount.Text)
 	if err != nil {
-		u.amountErr.SetText(err.Error())
-		u.result.SetText("")
+		u.setAmountErr(err.Error())
+		u.setResult("")
 		u.rateLine.SetText("")
 		return
 	}
 	if u.table == nil {
-		u.amountErr.SetText("Курсы ещё не загружены")
+		u.setAmountErr("Курсы ещё не загружены")
 		return
 	}
 	r, err := convert.Convert(amount, u.from.Selected, u.to.Selected, *u.table)
 	if err != nil {
-		u.amountErr.SetText(err.Error())
+		u.setAmountErr(err.Error())
 		return
 	}
-	u.amountErr.SetText("")
-	u.result.SetText(fmt.Sprintf("%s %s = %s %s",
+	u.setAmountErr("")
+	u.setResult(fmt.Sprintf("%s %s = %s %s",
 		formatMoney(amount), u.from.Selected, formatMoney(r.Amount), u.to.Selected))
 	u.rateLine.SetText(fmt.Sprintf("1 %s = %.4f %s  ·  курс на %s",
 		u.from.Selected, r.Rate, u.to.Selected, u.table.Date.Format(bnm.DateLayout)))
