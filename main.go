@@ -14,6 +14,7 @@ import (
 
 func main() {
 	a := app.NewWithID("md.pad.lab3")
+	a.Settings().SetTheme(appTheme{})
 	w := a.NewWindow("Конвертер валют (НБМ)")
 	loader := &rates.Loader{
 		Fetcher: bnm.NewClient(),
